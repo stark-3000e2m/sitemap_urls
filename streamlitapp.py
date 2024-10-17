@@ -100,7 +100,8 @@ if st.button('Fetch Sitemap Data'):
 
                 if all_data:
                     df = pd.DataFrame(all_data, columns=['URL', 'Page Title', 'Category'])
-                    st.dataframe(df)  # Display the DataFrame in a table format
+                    df.index = df.index + 1
+                    st.dataframe(df, index=True)  # Display the DataFrame in a table format
                     st.success(f"Data fetched successfully!")
                 else:
                     st.warning("No data found in the sitemap.")
