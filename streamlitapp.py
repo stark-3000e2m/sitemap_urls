@@ -3,6 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import pandas as pd
+from concurrent.futures import ThreadPoolExecutor
 
 # Headers to simulate a browser request
 headers = {
@@ -23,10 +24,19 @@ def get_category(sitemap_url):
         clean_category = filename.replace('-sitemap', '')
         return clean_category.replace('-', ' ')
 
+# Function to fetch and parse page data
+def fetch_page_data(url, category):
+    try:
+        page_response = requests.get(url, headers=headers, timeout=10)
+        page_soup = BeautifulSoup(page_response.text, 'html.parser')
+        page_title = page_soup.find('title').text.strip() if page_soup.find('title') else "No title found"
+        return (url, page_title, category)
+    except Exception as e:
+        return (url, f"Error fetching title: {e}", category)
+
 # Function to extract URLs and page titles
 def extract_urls_and_titles(sitemap_url):
-    response = requests.get(sitemap_url, headers=headers)
-    response.encoding = 'utf-8'
+    response = requests.get(sitemap_url, headers=headers, timeout=10)
     soup = BeautifulSoup(response.text, 'xml')
 
     urls_data = []
@@ -37,38 +47,28 @@ def extract_urls_and_titles(sitemap_url):
             sub_sitemap_url = sitemap.text
             urls_data.extend(extract_urls_and_titles(sub_sitemap_url))
     else:
-        for loc in soup.find_all('loc'):
-            url = loc.text
-            if url.lower().endswith(image_extensions):
-                continue
-
-            try:
-                page_response = requests.get(url, headers=headers)
-                page_response.encoding = 'utf-8'
-                page_soup = BeautifulSoup(page_response.text, 'html.parser')
-                page_title = page_soup.find('title').text if page_soup.find('title') else "No title found"
-            except Exception as e:
-                page_title = f"Error fetching title: {e}"
-
-            category = get_category(sitemap_url)
-            urls_data.append((url, page_title, category))
+        urls = [loc.text for loc in soup.find_all('loc') if not loc.text.lower().endswith(image_extensions)]
+        category = get_category(sitemap_url)
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            results = executor.map(lambda url: fetch_page_data(url, category), urls)
+            urls_data.extend(results)
 
     return urls_data
 
 # Function to check and determine which sitemap file exists
 def determine_sitemap(user_site):
-    sitemap_index = user_site + '/sitemap_index.xml'
-    sitemap = user_site + '/sitemap.xml'
+    sitemap_index = user_site.rstrip('/') + '/sitemap_index.xml'
+    sitemap = user_site.rstrip('/') + '/sitemap.xml'
 
     try:
-        response = requests.get(sitemap_index, headers=headers)
+        response = requests.get(sitemap_index, headers=headers, timeout=10)
         if response.status_code == 200:
             return sitemap_index
     except requests.RequestException:
         pass
 
     try:
-        response = requests.get(sitemap, headers=headers)
+        response = requests.get(sitemap, headers=headers, timeout=10)
         if response.status_code == 200:
             return sitemap
     except requests.RequestException:
@@ -87,16 +87,18 @@ if st.button('Fetch Sitemap Data'):
         sitemap_url_to_use = determine_sitemap(user_site)
         if sitemap_url_to_use:
             try:
-                response = requests.get(sitemap_url_to_use, headers=headers)
+                response = requests.get(sitemap_url_to_use, headers=headers, timeout=10)
                 response.raise_for_status()
-                response.encoding = 'utf-8'
                 soup = BeautifulSoup(response.text, 'xml')
                 urls = [loc.text for loc in soup.find_all('loc')]
 
                 all_data = []
-                for sitemap_url in urls:
+                progress_bar = st.progress(0)
+                total_sitemaps = len(urls)
+                for idx, sitemap_url in enumerate(urls):
                     sitemap_data = extract_urls_and_titles(sitemap_url)
                     all_data.extend(sitemap_data)
+                    progress_bar.progress((idx + 1) / total_sitemaps)
 
                 if all_data:
                     df = pd.DataFrame(all_data, columns=['URL', 'Page Title', 'Category'])
